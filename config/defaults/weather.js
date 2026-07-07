@@ -1,6 +1,6 @@
 .pragma library
 
 var data = {
-    "location": "",
+    "location": "Munich",
     "unit": "C"
 }
