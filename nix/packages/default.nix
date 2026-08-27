@@ -72,6 +72,10 @@ let
 
 in pkgs.buildEnv {
   name = "Ambxst-${version}";
-  paths = [ envAmbxst backendPkg launcher ];
+  # backendPkg is deliberately not listed here: it also installs `bin/ambxst`,
+  # which collides with the launcher above at equal priority and makes buildEnv
+  # refuse to merge. The launcher already execs it by absolute store path, so
+  # the backend does not need to be on PATH.
+  paths = [ envAmbxst launcher ];
   meta.mainProgram = "ambxst";
 }
