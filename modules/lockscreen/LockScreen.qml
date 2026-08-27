@@ -23,6 +23,21 @@ WlSessionLockSurface {
     property string errorMessage: ""
     property int failLockSecondsLeft: 0
 
+    // Single exit path for every failed, errored or abandoned attempt.
+    // `authenticating` gates both the spinner and the password field's enabled
+    // state, so any path that leaves it true locks the user out of their own
+    // session with no way back. Keep every failure route going through here.
+    function failAuth(message) {
+        authWatchdog.stop();
+        authPasswordHolder.password = "";
+        passwordInput.text = "";
+        authenticating = false;
+        errorMessage = message;
+
+        if (Config.animDuration > 0)
+            wrongPasswordAnim.start();
+    }
+
     // Always transparent - blur background handles the visuals
     color: "transparent"
 
@@ -531,7 +546,17 @@ WlSessionLockSurface {
 
                                 authenticating = true;
                                 errorMessage = "";
-                                pamAuth.start();
+
+                                // start() returns false when PAM could not be
+                                // initialised at all; without this check the
+                                // spinner would run forever waiting for a
+                                // `completed` that can never arrive.
+                                if (!pamAuth.start()) {
+                                    console.warn("PAM: start() failed, authentication unavailable");
+                                    root.failAuth("Authentication unavailable");
+                                } else {
+                                    authWatchdog.restart();
+                                }
                             }
                         }
                     }
@@ -575,8 +600,9 @@ WlSessionLockSurface {
                 }
                 ScriptAction {
                     script: {
-                        passwordInput.text = "";
-                        authenticating = false;
+                        // Purely cosmetic now. State reset lives in failAuth()
+                        // so that it also happens when animations are disabled
+                        // (Config.animDuration === 0, e.g. under Game Mode).
                         passwordInputBox.showError = false;
                     }
                 }
@@ -678,10 +704,12 @@ WlSessionLockSurface {
         }
 
         onCompleted: result => {
-            // Limpiar contraseña
-            authPasswordHolder.password = "";
-
             if (result === PamResult.Success) {
+                authWatchdog.stop();
+
+                // Limpiar contraseña
+                authPasswordHolder.password = "";
+
                 // Autenticación exitosa - trigger exit animation
                 startAnim = false;
 
@@ -692,12 +720,37 @@ WlSessionLockSurface {
                 authenticating = false;
             } else {
                 // Error de autenticación
-                errorMessage = "Authentication failed";
-                console.warn("PAM auth failed with result:", result);
-                if (Config.animDuration > 0) {
-                    wrongPasswordAnim.start();
-                }
+                console.warn("PAM auth failed with result:", PamResult.toString(result));
+                root.failAuth(result === PamResult.MaxTries ? "Too many attempts" : "Authentication failed");
             }
+        }
+
+        // PamContext reports through two channels: `completed` carries a
+        // PamResult, but a failure of the pam_authenticate call itself arrives
+        // here as PamError instead. A wrong password normally comes through
+        // `completed` as PamResult.Failed, so this path is defensive — but
+        // without it any PAM stack that errors out leaves `authenticating`
+        // true and the lockscreen unrecoverable.
+        onError: err => {
+            console.warn("PAM error:", PamError.toString(err), "message:", pamAuth.message);
+            root.failAuth("Authentication error");
+        }
+    }
+
+    // Last-resort guard: if PAM neither completes nor errors within this
+    // window, give the user their input field back rather than stranding them.
+    Timer {
+        id: authWatchdog
+        interval: 10000
+        repeat: false
+
+        onTriggered: {
+            if (!root.authenticating)
+                return;
+
+            console.warn("PAM: no response within", interval, "ms, aborting");
+            pamAuth.abort();
+            root.failAuth("Authentication timed out");
         }
     }
 
