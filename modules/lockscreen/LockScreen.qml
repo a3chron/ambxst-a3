@@ -99,7 +99,11 @@ WlSessionLockSurface {
     ScreencopyView {
         id: screencopyBackground
         anchors.fill: parent
-        captureSource: root.screen
+        // Lock surfaces are created and destroyed with their output, so this
+        // can be evaluated while the output is on its way out. Capturing a
+        // dead output is a fatal Wayland error, which kills the whole shell
+        // and orphans the session lock — leave captureSource null instead.
+        captureSource: root.screen ?? null
         live: false
         paintCursor: false
         visible: startAnim  // Visible solo cuando startAnim es true
@@ -793,8 +797,11 @@ WlSessionLockSurface {
 
     // Initialize when component is created (when lock becomes active)
     Component.onCompleted: {
-        // Capture screen immediately
-        screencopyBackground.captureFrame();
+        // Capture screen immediately — but only if we actually have an output
+        // to capture. Skipping it just means no frozen-screen backdrop; the
+        // wallpaper below still renders.
+        if (screencopyBackground.captureSource)
+            screencopyBackground.captureFrame();
 
         // Start animations
         startAnim = true;
